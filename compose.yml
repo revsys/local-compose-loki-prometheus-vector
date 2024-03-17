@@ -1,0 +1,165 @@
+services:
+
+  db:
+    image: pgautoupgrade/pgautoupgrade:latest
+    container_name: postgres
+    environment:
+      - "POSTGRES_HOST_AUTH_METHOD=trust"
+    expose:
+      - "5432"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready",
+          "--host=db",
+          "--username=postgres"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    init: true
+    user: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data/
+
+  redis:
+    image: "redis:alpine"
+    container_name: redis
+    expose:
+      - "6379"
+    init: true
+    volumes:
+      - redis-data:/data
+    stop_signal: SIGKILL
+
+  ########################################################
+  # Example Dramatiq (Async task runner) and Django web
+  # containers. You would replace this section with your
+  # own code/containers.
+  ########################################################
+  # worker:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/Dockerfile
+  #   container_name: worker
+  #   depends_on:
+  #     db:
+  #       condition: "service_started"
+  #   env_file: .env
+  #   init: true
+  #   ports:
+  #     - "9191:9191"
+  #   volumes:
+  #     - .:/code
+  #     - "/tmp/dramatiq-prometheus"
+  #   working_dir: /code
+  #   environment:
+  #    - "prometheus_multiproc_dir=/tmp/dramatiq-prometheus"
+  #    - "dramatiq_prom_db=/tmp/dramatiq-prometheus"
+  #   command: [
+  #     "python",
+  #     "manage.py",
+  #     "rundramatiq"
+  #   ]
+  #   stop_signal: SIGKILL
+
+  # web:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/Dockerfile
+  #   container_name: web
+  #   depends_on:
+  #     db:
+  #       condition: "service_started"
+  #   env_file: .env
+  #   init: true
+  #   volumes:
+  #     - .:/code
+  #   working_dir: /code
+  #   command: [
+  #     "/bin/bash",
+  #     "/code/compose-start.sh",
+  #   ]
+  #   ports:
+  #     - "8000:8000"
+  #   tty: true
+
+################################################################
+# Monitoring
+################################################################
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - "./docker/prometheus.yml:/etc/prometheus/prometheus.yml"
+    ports:
+      - 9090:9090
+
+  loki:
+    image: grafana/loki:2.9.2
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+
+  vector:
+    image: timberio/vector:0.36.0-debian
+    hostname: vector
+    container_name: vector
+    depends_on:
+      loki:
+        condition: "service_started"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "./docker/vector.yaml:/etc/vector/vector.yaml"
+    ports:
+      - 27832:27832
+      - 27839:27839
+      - 44223:44223
+      - 16902:16902
+
+  grafana:
+    container_name: grafana
+    environment:
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    entrypoint:
+      - sh
+      - -euc
+      - |
+        mkdir -p /etc/grafana/provisioning/datasources
+        cat <<EOF > /etc/grafana/provisioning/datasources/ds.yaml
+        apiVersion: 1
+        datasources:
+        - name: Loki
+          type: loki
+          access: proxy
+          orgId: 1
+          url: http://loki:3100
+          basicAuth: false
+          isDefault: true
+          version: 1
+          editable: false
+        - name: Prometheus
+          type: prometheus
+          access: proxy
+          orgId: 1
+          url: http://prometheus:9090
+          jsonData:
+            httpMethod: POST
+            manageAlerts: true
+            prometheusType: Prometheus
+            prometheusVersion: 2.44.0
+            cacheLevel: 'High'
+            disableRecordingRules: false
+            incrementalQueryOverlapWindow: 10m
+        EOF
+        /run.sh
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    stop_signal: SIGKILL
+
+volumes:
+  postgres-data:
+  redis-data:

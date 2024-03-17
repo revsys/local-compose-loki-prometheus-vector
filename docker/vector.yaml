@@ -1,0 +1,23 @@
+sources:
+  # Slurp up all the logs from every container that isn't ourself (aka vector)
+  all-in:
+    type: docker_logs
+    auto_partial_merge: true
+    exclude_containers:
+      - "vector"
+
+# transforms:
+# We don't have any configuration, but you can get fancy with adjusting
+# the data in your logs if you would like
+
+sinks:
+  # Send all of our logs to Loki
+  all-out:
+    type: loki
+    inputs:
+      - "all-in"
+    encoding:
+      codec: "json"
+    endpoint: http://loki:3100
+    labels:
+      env: compose
